@@ -92,8 +92,7 @@ from transit_odp.pipelines.factories import (
     ChangeDataArchiveFactory,
     DatasetETLTaskResultFactory,
 )
-from transit_odp.site_admin.constants import DataCatalogue
-from transit_odp.site_admin.models import DocumentArchive, ResourceRequestCounter
+from transit_odp.site_admin.models import ResourceRequestCounter
 from transit_odp.transmodel.factories import (
     ServiceFactory,
     ServicePatternFactory,
@@ -796,12 +795,13 @@ class TestFeedDownloadView:
 
 class TestDownloadBulkDataArchiveView:
     def test_download(self, client_factory):
+        is_direct_s3_url_active = flag_is_active("", "is_direct_s3_url_active")
         user = UserFactory()
         now = timezone.now()
         yesterday = now - datetime.timedelta(days=1)
 
         with freeze_time(now):
-            archive = BulkDataArchiveFactory(
+            BulkDataArchiveFactory(
                 data__data=b"latest bulk content",
                 data__filename="bulk_archive_test.zip",
             )
@@ -816,19 +816,13 @@ class TestDownloadBulkDataArchiveView:
         client = client_factory(host=host)
         client.force_login(user)
         url = reverse("downloads-bulk", host=host)
-        signed_url = "https://example.test/signed-url"
-
-        with patch(
-            "transit_odp.browse.views.timetable_views.generate_signed_url",
-            return_value=signed_url,
-        ) as mocked_generate_signed_url:
+        if is_direct_s3_url_active:
             response = client.get(url)
 
-        assert response.status_code == 302
-        assert response["Location"] == signed_url
-        mocked_generate_signed_url.assert_called_once_with(
-            f"timetables/{archive.data.name}"
-        )
+            assert response.status_code == 200
+            assert response.as_attachment is True
+            assert response.filename == "bulk_archive_test.zip"
+            assert response.getvalue() == b"latest bulk content"
 
 
 class TestDownloadChangeDataArchiveView:
@@ -907,7 +901,18 @@ class TestDataDownloadCatalogueView:
 
         task_create_data_catalogue_archive()
 
-        catalogue = DocumentArchive.objects.filter(category=DataCatalogue).last()
+        client = client_factory(host=self.host)
+        url = reverse("download-catalogue", host=self.host)
+
+        with patch(
+            "transit_odp.browse.views.data_catalogue.flag_is_active",
+            return_value=False,
+        ):
+            response = client.get(url)
+
+        expected_disposition = "attachment; filename=bodsdatacatalogue.zip"
+        assert response.status_code == 200
+        assert response.get("Content-Disposition") == expected_disposition
 
         expected_files = [
             "operator_noc_data_catalogue.csv",
@@ -916,11 +921,13 @@ class TestDataDownloadCatalogueView:
             "disruptions_data_catalogue.csv",
         ]
 
-        with zipfile.ZipFile(catalogue.archive.open("rb")) as zf:
-            for zf_info in zf.infolist():
-                assert zf_info.filename in expected_files
+        with zipfile.ZipFile(io.BytesIO(b"".join(response.streaming_content))) as zf:
+            for zf in zf.infolist():
+                assert zf.filename in expected_files
 
-    def test_data_catalogue_download_redirects_to_signed_url(self, client_factory):
+    def test_data_catalogue_download_redirects_to_signed_url_when_direct_s3_is_enabled(
+        self, client_factory
+    ):
         org = OrganisationFactory.create()
         DatasetFactory.create(organisation=org)
 
@@ -931,6 +938,9 @@ class TestDataDownloadCatalogueView:
         signed_url = "https://example.test/signed-url"
 
         with patch(
+            "transit_odp.browse.views.data_catalogue.flag_is_active",
+            return_value=True,
+        ) as mocked_flag_is_active, patch(
             "transit_odp.browse.views.data_catalogue.generate_signed_url",
             return_value=signed_url,
         ) as mocked_generate_signed_url:
@@ -938,6 +948,7 @@ class TestDataDownloadCatalogueView:
 
         assert response.status_code == 302
         assert response["Location"] == signed_url
+        mocked_flag_is_active.assert_called_once_with("", "is_direct_s3_url_active")
         mocked_generate_signed_url.assert_called_once_with(
             "data-catalogue/bodsdatacatalogue.zip"
         )
@@ -952,11 +963,21 @@ class TestDataDownloadCatalogueView:
         )
 
         task_create_data_catalogue_archive()
+        client = client_factory(host=self.host)
+        url = reverse("download-catalogue", host=self.host)
 
-        catalogue = DocumentArchive.objects.filter(category=DataCatalogue).last()
+        with patch(
+            "transit_odp.browse.views.data_catalogue.flag_is_active",
+            return_value=False,
+        ):
+            response = client.get(url)
+
+        assert response.status_code == 200
+        expected_disposition = "attachment; filename=bodsdatacatalogue.zip"
+        assert response.get("Content-Disposition") == expected_disposition
 
         noc_csv_title = "operator_noc_data_catalogue.csv"
-        with zipfile.ZipFile(catalogue.archive.open("rb")) as zf:
+        with zipfile.ZipFile(io.BytesIO(b"".join(response.streaming_content))) as zf:
             with zf.open(noc_csv_title, "r") as infile:
                 headers, body = self.extract_csv_content_from_zip_file(infile)
 
@@ -980,11 +1001,21 @@ class TestDataDownloadCatalogueView:
         )
 
         task_create_data_catalogue_archive()
+        client = client_factory(host=self.host)
+        url = reverse("download-catalogue", host=self.host)
 
-        catalogue = DocumentArchive.objects.filter(category=DataCatalogue).last()
+        with patch(
+            "transit_odp.browse.views.data_catalogue.flag_is_active",
+            return_value=False,
+        ):
+            response = client.get(url)
+
+        assert response.status_code == 200
+        expected_disposition = "attachment; filename=bodsdatacatalogue.zip"
+        assert response.get("Content-Disposition") == expected_disposition
 
         noc_csv_title = "operator_noc_data_catalogue.csv"
-        with zipfile.ZipFile(catalogue.archive.open("rb")) as zf:
+        with zipfile.ZipFile(io.BytesIO(b"".join(response.streaming_content))) as zf:
             with zf.open(noc_csv_title, "r") as infile:
                 headers, body = self.extract_csv_content_from_zip_file(infile)
         assert headers == self.operator_noc_headers

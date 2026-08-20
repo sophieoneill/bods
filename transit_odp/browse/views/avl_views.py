@@ -8,6 +8,7 @@ from django.shortcuts import redirect
 from django.utils.translation import gettext as _
 from django.views.generic import DetailView, TemplateView, UpdateView
 from django_hosts import reverse
+from waffle import flag_is_active
 
 import config.hosts
 from transit_odp.avl.constants import (
@@ -173,10 +174,16 @@ class DownloadCAVLDataArchiveView(DownloadView):
         return archive
 
     def get_download_file(self):
-        return generate_signed_url(f"avl/{self.object.data.name}")
+        is_direct_s3_url_active = flag_is_active("", "is_direct_s3_url_active")
+        if is_direct_s3_url_active:
+            return generate_signed_url(f"avl/{self.object.data.name}")
+        return self.object.data
 
     def render_to_response(self, **response_kwargs):
-        return redirect(self.get_download_file())
+        is_direct_s3_url_active = flag_is_active("", "is_direct_s3_url_active")
+        if is_direct_s3_url_active:
+            return redirect(self.get_download_file())
+        return super().render_to_response(**response_kwargs)
 
 
 class DownloadSIRIVMDataArchiveView(ResourceCounterMixin, DownloadCAVLDataArchiveView):

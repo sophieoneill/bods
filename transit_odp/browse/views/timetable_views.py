@@ -1359,7 +1359,10 @@ class DownloadBulkDataArchiveView(ResourceCounterMixin, DownloadView):
             )
 
     def get_download_file(self):
-        return generate_signed_url(f"timetables/{self.object.data.name}")
+        is_direct_s3_url_active = flag_is_active("", "is_direct_s3_url_active")
+        if is_direct_s3_url_active:
+            return generate_signed_url(f"timetables/{self.object.data.name}")
+        return generate_signed_url(self.object.data.name)
 
     def render_to_response(self, **response_kwargs):
         return redirect(self.get_download_file())
@@ -1400,10 +1403,23 @@ class DownloadBulkDataArchiveRegionsView(DownloadView):
             )
 
     def get_download_file(self, *args):
-        return generate_signed_url(f"timetables/{self.object.data.name}")
+        is_direct_s3_url_active = flag_is_active("", "is_direct_s3_url_active")
+        if is_direct_s3_url_active:
+            return generate_signed_url(f"timetables/{self.object.data.name}")
+        s3_start = datetime.now()
+        data = self.object.data
+        s3_endtime = datetime.now()
+        logger.info(
+            f"""S3 bucket download for region-wise bulk archive took
+            {(s3_endtime - s3_start).total_seconds()} seconds"""
+        )
+        return data
 
     def render_to_response(self, **response_kwargs):
-        return redirect(self.get_download_file())
+        is_direct_s3_url_active = flag_is_active("", "is_direct_s3_url_active")
+        if is_direct_s3_url_active:
+            return redirect(self.get_download_file())
+        return super().render_to_response(**response_kwargs)
 
 
 class DownloadCompliantBulkDataArchiveView(DownloadView):
